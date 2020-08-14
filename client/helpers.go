@@ -15,11 +15,19 @@ func getResultsOffset(resp *http.Response) string {
 	// Get the next link to prevent duplicates
 	for _, v := range resp.Header["Link"] {
 		if strings.Contains(v, "next") {
+			// Split the header
+			s := strings.Split(v, ",")
+
+			// Return if the length is not 2 (one for self link, one for next link)
+			if len(s) != 2 {
+				return ""
+			}
+
 			// Build regex match
 			re := regexp.MustCompile("\\<(.*?)\\>; rel=\"next\"")
 
 			// Find the URL inside of the string
-			match := re.FindStringSubmatch(v)
+			match := re.FindStringSubmatch(s[1])
 
 			// Convert to URL
 			nextUrl, _ := url.Parse(match[1])

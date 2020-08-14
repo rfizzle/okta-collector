@@ -58,7 +58,7 @@ func (oktaClient *OktaClient) GetLogs(startTime string, endTime string, resultsC
 	// Handle paged responses
 	for hasNext {
 		// Get logs
-		resultCount, afterLink, err := oktaClient.getLogsRequest(params, afterLink, resultsChannel)
+		resultCount, newAfterLink, err := oktaClient.getLogsRequest(params, afterLink, resultsChannel)
 
 		// Handle error
 		if err != nil {
@@ -69,7 +69,8 @@ func (oktaClient *OktaClient) GetLogs(startTime string, endTime string, resultsC
 		count += resultCount
 
 		// Set afterLink
-		hasNext = afterLink != ""
+		hasNext = newAfterLink != ""
+		afterLink = newAfterLink
 	}
 
 	return count, nil
@@ -117,9 +118,9 @@ func (oktaClient *OktaClient) getLogsRequest(params url.Values, afterLink string
 	}
 
 	// Get next page of results
-	afterLink = getResultsOffset(response)
+	newAfterLink := getResultsOffset(response)
 
-	return len(events), afterLink, nil
+	return len(events), newAfterLink, nil
 }
 
 // Make an Okta API call.
