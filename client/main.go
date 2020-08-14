@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/spf13/viper"
 	"github.com/tidwall/pretty"
 	"io"
 	"io/ioutil"
@@ -13,6 +14,7 @@ import (
 	"time"
 )
 
+// Constants for HTTP client
 const (
 	initialBackoffMS  = 1000
 	maxBackoffMS      = 32000
@@ -21,12 +23,14 @@ const (
 	limit             = "1000"
 )
 
+// Okta client struct
 type OktaClient struct {
 	Domain      string
 	Token       string
 	httpClient  *http.Client
 }
 
+// Create a new client with the okta domain and token and a http client with a 10 seconds timeout
 func NewClient(domain, token string) *OktaClient {
 	return &OktaClient{
 		Domain: domain,
@@ -37,12 +41,13 @@ func NewClient(domain, token string) *OktaClient {
 	}
 }
 
+// Get logs method with paged results logic
+// Events are streamed into the results channel
 func (oktaClient *OktaClient) GetLogs(startTime string, endTime string, resultsChannel chan<- string) (int, error) {
 	// Setup variables
-	var events []string
-	var tmpEventsRaw []interface{}
 	count := 0
 	afterLink := ""
+	hasNext := true
 
 	// Setup request
 	params := url.Values{}
@@ -50,12 +55,43 @@ func (oktaClient *OktaClient) GetLogs(startTime string, endTime string, resultsC
 	params.Set("since", startTime)
 	params.Set("until", endTime)
 
+	// Handle paged responses
+	for hasNext {
+		// Get logs
+		resultCount, afterLink, err := oktaClient.getLogsRequest(params, afterLink, resultsChannel)
+
+		// Handle error
+		if err != nil {
+			return -1, err
+		}
+
+		// Increment count
+		count += resultCount
+
+		// Set afterLink
+		hasNext = afterLink != ""
+	}
+
+	return count, nil
+}
+
+// Individual get logs request method
+func (oktaClient *OktaClient) getLogsRequest(params url.Values, afterLink string, resultsChannel chan<- string) (int, string, error) {
+	// Set variables
+	var events []string
+	var tmpEventsRaw []interface{}
+
+	// Set next link
+	if afterLink != "" {
+		params.Set("next", afterLink)
+	}
+
 	// Call request
 	response, body, err := oktaClient.conductRequest("GET", "/api/v1/logs", params)
 
-	// Handle HTTP error
+	// Handle error
 	if err != nil {
-		return -1, errors.New(fmt.Sprintf("Error conducting request: %v\n", err))
+		return -1, "", errors.New(fmt.Sprintf("Error conducting request: %v\n", err))
 	}
 
 	// Convert from JSON
@@ -63,7 +99,7 @@ func (oktaClient *OktaClient) GetLogs(startTime string, endTime string, resultsC
 
 	// Handle error
 	if err != nil {
-		return -1, errors.New(fmt.Sprintf("Error unmarshalling response body: %v\n", err))
+		return -1, "", errors.New(fmt.Sprintf("Error unmarshalling response body: %v\n", err))
 	}
 
 	// Convert to strings
@@ -71,65 +107,19 @@ func (oktaClient *OktaClient) GetLogs(startTime string, endTime string, resultsC
 
 	// Handle error
 	if err != nil {
-		return -1, errors.New(fmt.Sprintf("Error converting logs to strings: %v\n", err))
+		return -1, "", errors.New(fmt.Sprintf("Error converting logs to strings: %v\n", err))
 	}
 
-	if len(events) == 0 {
-		return 0, nil
-	} else {
-		count += len(events)
-		for _, event := range events {
-			// Ugly print the json into a single lined string
-			resultsChannel <- string(pretty.Ugly([]byte(event)))
-		}
+	// Send events to channel
+	for _, event := range events {
+		// Ugly print the json into a single lined string
+		resultsChannel <- string(pretty.Ugly([]byte(event)))
 	}
 
-	// Get results offset
+	// Get next page of results
 	afterLink = getResultsOffset(response)
 
-	// Handle paged responses
-	for afterLink != "" {
-		// Clear variables
-		tmpEventsRaw = nil
-		events = nil
-
-		// Set next link
-		params.Set("next", afterLink)
-
-		// Call request
-		response, body, err = oktaClient.conductRequest("GET", "/api/v1/logs", params)
-
-		// Handle error
-		if err != nil {
-			return -1, errors.New(fmt.Sprintf("Error conducting request: %v\n", err))
-		}
-
-		// Convert from JSON
-		err = json.Unmarshal(body, &tmpEventsRaw)
-
-		// Handle error
-		if err != nil {
-			return -1, errors.New(fmt.Sprintf("Error unmarshalling response body: %v\n", err))
-		}
-
-		// Convert to strings
-		events, err = convertLogsToString(tmpEventsRaw)
-
-		// Handle error
-		if err != nil {
-			return -1, errors.New(fmt.Sprintf("Error converting logs to strings: %v\n", err))
-		}
-
-		count += len(events)
-		for _, event := range events {
-			// Ugly print the json into a single lined string
-			resultsChannel <- string(pretty.Ugly([]byte(event)))
-		}
-
-		afterLink = getResultsOffset(response)
-	}
-
-	return count, nil
+	return len(events), afterLink, nil
 }
 
 // Make an Okta API call.
@@ -154,7 +144,10 @@ func (oktaClient *OktaClient) conductRequest(method string, uri string, params u
 		urlObj.RawQuery = params.Encode()
 	}
 
-	fmt.Printf("Calling URL: %s\n", urlObj.String())
+	// Log for debugging
+	if viper.GetBool("verbose") {
+		fmt.Printf("Calling URL: %s\n", urlObj.String())
+	}
 
 	// Setup headers
 	headers := make(map[string]string)
@@ -162,7 +155,7 @@ func (oktaClient *OktaClient) conductRequest(method string, uri string, params u
 	headers["Authorization"] = fmt.Sprintf("SSWS %s", oktaClient.Token)
 	headers["Content-Type"] = "application/json"
 
-	// JSON marshal body
+	// JSON marshal body if POST or PUT
 	var requestBody io.ReadCloser = nil
 	if method == "POST" || method == "PUT" {
 		// Marshal JSON
@@ -170,8 +163,10 @@ func (oktaClient *OktaClient) conductRequest(method string, uri string, params u
 		requestBody = ioutil.NopCloser(strings.NewReader(string(bodyString)))
 	}
 
+	// Make a retryable HTTP call
 	response, body, err := oktaClient.makeRetryableHttpCall(method, urlObj, headers, requestBody)
 
+	// Handle error
 	if err != nil {
 		return nil, nil, err
 	}
@@ -179,6 +174,7 @@ func (oktaClient *OktaClient) conductRequest(method string, uri string, params u
 	return response, body, nil
 }
 
+// Make a retryable HTTP call. Supports APIs that return a 429 for too many requests
 func (oktaClient *OktaClient) makeRetryableHttpCall(
 	method string,
 	url url.URL,
@@ -187,29 +183,42 @@ func (oktaClient *OktaClient) makeRetryableHttpCall(
 ) (*http.Response, []byte, error) {
 	backoffMs := initialBackoffMS
 	for {
+		// Setup new request
 		request, err := http.NewRequest(method, url.String(), nil)
+
+		// Handle error
 		if err != nil {
 			return nil, nil, err
 		}
 
+		// Setup headers
 		if headers != nil {
 			for k, v := range headers {
 				request.Header.Set(k, v)
 			}
 		}
+
+		// Setup body
 		if body != nil {
 			request.Body = body
 		}
 
+		// Conduct request
 		resp, err := oktaClient.httpClient.Do(request)
 		var body []byte
-		if err != nil {
+
+		// Handle error or failed response status code
+		if err != nil || (resp.StatusCode != 200 && resp.StatusCode != rateLimitHttpCode) {
+			if err == nil {
+				return resp, body, errors.New(fmt.Sprintf("HTTP response code: %v\n", resp.Status))
+			}
 			return resp, body, err
 		}
 
+		// Handle rate limit code
 		if backoffMs > maxBackoffMS || resp.StatusCode != rateLimitHttpCode {
 			body, err = ioutil.ReadAll(resp.Body)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return resp, body, err
 		}
 

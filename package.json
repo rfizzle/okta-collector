@@ -1,0 +1,8 @@
+{
+  "name": "@rfizzle/okta-collector",
+  "version": "0.0.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rfizzle/okta-collector.git"
+  }
+}

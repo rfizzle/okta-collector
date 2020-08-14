@@ -93,7 +93,7 @@ func getEvents(timestamp string, resultChannel chan<- string) (int, time.Time) {
 	now := time.Now()
 
 	// Build an Okta client
-	oktaClient := client.NewClient(viper.GetString("okta-domain"), viper.GetString("okta-api-token"))
+	oktaClient := client.NewClient(viper.GetString("okta-domain"), viper.GetString("okta-api-key"))
 
 	// Get logs
 	count, err := oktaClient.GetLogs(timestamp, now.Format(time.RFC3339), resultChannel)
