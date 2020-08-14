@@ -58,15 +58,21 @@ func (oktaClient *OktaClient) GetLogs(startTime string, endTime string, resultsC
 	// Handle paged responses
 	for hasNext {
 		// Get logs
-		resultCount, newAfterLink, err := oktaClient.getLogsRequest(params, afterLink, resultsChannel)
+		events, newAfterLink, err := oktaClient.getLogsRequest(params, afterLink)
 
 		// Handle error
 		if err != nil {
 			return -1, err
 		}
 
+		// Send events to channel
+		for _, event := range events {
+			// Ugly print the json into a single lined string
+			resultsChannel <- string(pretty.Ugly([]byte(event)))
+		}
+
 		// Increment count
-		count += resultCount
+		count += len(events)
 
 		// Set afterLink
 		hasNext = newAfterLink != ""
@@ -77,14 +83,14 @@ func (oktaClient *OktaClient) GetLogs(startTime string, endTime string, resultsC
 }
 
 // Individual get logs request method
-func (oktaClient *OktaClient) getLogsRequest(params url.Values, afterLink string, resultsChannel chan<- string) (int, string, error) {
+func (oktaClient *OktaClient) getLogsRequest(params url.Values, afterLink string) ([]string, string, error) {
 	// Set variables
 	var events []string
 	var tmpEventsRaw []interface{}
 
 	// Set next link
 	if afterLink != "" {
-		params.Set("next", afterLink)
+		params.Set("after", afterLink)
 	}
 
 	// Call request
@@ -92,7 +98,7 @@ func (oktaClient *OktaClient) getLogsRequest(params url.Values, afterLink string
 
 	// Handle error
 	if err != nil {
-		return -1, "", errors.New(fmt.Sprintf("Error conducting request: %v\n", err))
+		return nil, "", errors.New(fmt.Sprintf("Error conducting request: %v\n", err))
 	}
 
 	// Convert from JSON
@@ -100,7 +106,7 @@ func (oktaClient *OktaClient) getLogsRequest(params url.Values, afterLink string
 
 	// Handle error
 	if err != nil {
-		return -1, "", errors.New(fmt.Sprintf("Error unmarshalling response body: %v\n", err))
+		return nil, "", errors.New(fmt.Sprintf("Error unmarshalling response body: %v\n", err))
 	}
 
 	// Convert to strings
@@ -108,19 +114,13 @@ func (oktaClient *OktaClient) getLogsRequest(params url.Values, afterLink string
 
 	// Handle error
 	if err != nil {
-		return -1, "", errors.New(fmt.Sprintf("Error converting logs to strings: %v\n", err))
-	}
-
-	// Send events to channel
-	for _, event := range events {
-		// Ugly print the json into a single lined string
-		resultsChannel <- string(pretty.Ugly([]byte(event)))
+		return nil, "", errors.New(fmt.Sprintf("Error converting logs to strings: %v\n", err))
 	}
 
 	// Get next page of results
 	newAfterLink := getResultsOffset(response)
 
-	return len(events), newAfterLink, nil
+	return events, newAfterLink, nil
 }
 
 // Make an Okta API call.
