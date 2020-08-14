@@ -23,8 +23,6 @@ func getResultsOffset(resp *http.Response) string {
 			// Convert to URL
 			nextUrl, _ := url.Parse(match[1])
 
-			//fmt.Printf("Next URL: %s\n", nextUrl)
-
 			if nextUrl.Query()["after"] == nil {
 				// Get after param from URL
 				return ""
